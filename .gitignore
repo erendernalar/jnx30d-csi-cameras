@@ -1,0 +1,21 @@
+# captured images / videos and test output (may contain people or rooms)
+captures/
+validation/
+inspect-*/
+inspect-*.tgz
+*.raw
+*.mp4
+# kernel build output
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+*.dtbo
+*.dtb
+__pycache__/
+*.pyc

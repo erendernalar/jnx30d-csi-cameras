@@ -1,0 +1,75 @@
+--- a/nv_ov9281.c
++++ b/nv_ov9281.c
+@@ -85,8 +85,9 @@
+ 
+ /* OV9281 Other Stuffs */
+ #define OV9281_DEFAULT_GAIN		0x0010 /* 1.0x real gain */
+-#define OV9281_MIN_GAIN			0x0001
+-#define OV9281_MAX_GAIN			0x1FFF
++/* JNX30D port: analog gain lives in 0x3509 only, 0x10 = 1x .. 0xff ~ 15.9x */
++#define OV9281_MIN_GAIN			0x0010
++#define OV9281_MAX_GAIN			0x00FF
+ 
+ #define OV9281_DEFAULT_FRAME_LENGTH	0x071C
+ #define OV9281_MIN_FRAME_LENGTH		0x0001
+@@ -104,7 +105,14 @@
+ #define OV9281_DEFAULT_WIDTH		OV9281_MAX_WIDTH
+ #define OV9281_DEFAULT_HEIGHT		OV9281_MAX_HEIGHT
+ #define OV9281_DEFAULT_DATAFMT		MEDIA_BUS_FMT_SBGGR10_1X10
+-#define OV9281_DEFAULT_CLK_FREQ		26000000
++/* JNX30D port: UC-788 runs from its own 24 MHz oscillator; MCLK pad unused */
++#define OV9281_DEFAULT_CLK_FREQ		24000000
++
++/* JNX30D port: runtime sensor test pattern (0 = off, else 0x5e00 value) */
++static int test_pattern;
++module_param(test_pattern, int, 0644);
++MODULE_PARM_DESC(test_pattern,
++		 "0=off, nonzero=value written to PRE_CTRL00 (0x5e00), e.g. 0x80");
+ 
+ #define OV9281_DEFAULT_I2C_ADDRESS_C0		(0xc0 >> 1)
+ #define OV9281_DEFAULT_I2C_ADDRESS_20		(0x20 >> 1)
+@@ -365,6 +373,14 @@
+ 	if (pw->avdd)
+ 		regulator_disable(pw->avdd);
+ 
++	/*
++	 * JNX30D port: the regulator path used to return with state still
++	 * SWITCH_ON, so later control writes went to an unpowered sensor.
++	 */
++	if (!err) {
++		pw->state = SWITCH_OFF;
++		usleep_range(1000, 1100);
++	}
+ 	return err;
+ 
+ power_off_done:
+@@ -764,12 +780,15 @@
+ 					 OV9281_TIMING_FORMAT1_FLIP);
+ 	}
+ 
+-#ifdef TPG
+-	err = ov9281_write_reg(priv->s_data, OV9281_PRE_CTRL00_ADDR,
+-			       OV9281_PRE_CTRL00_TEST_PATTERN_EN);
+-	if (err)
+-		dev_warn(dev, "%s: error enabling TPG\n", __func__);
+-#endif
++	if (test_pattern) {
++		err = ov9281_write_reg(priv->s_data, OV9281_PRE_CTRL00_ADDR,
++				       test_pattern & 0xff);
++		if (err)
++			dev_warn(dev, "%s: error enabling TPG\n", __func__);
++		else
++			dev_info(dev, "test pattern 0x%02x enabled\n",
++				 test_pattern & 0xff);
++	}
+ 
+ 	dev_dbg(dev, "%s: stream on\n", __func__);
+ 	err = ov9281_write_table(priv,
+@@ -1153,6 +1172,7 @@
+ 		return -EINVAL;
+ 	}
+ 
++	dev_info(&client->dev, "OV9281 chip ID 0x%04x verified\n", chip_id);
+ 	return 0;
+ }
+ 

@@ -1,0 +1,104 @@
+--- a/ov5647.c
++++ b/ov5647.c
+@@ -133,6 +133,7 @@
+ 	struct v4l2_subdev		*subdev;
+ 	u32				frame_length;
+ 	bool				pwdn_gpio_owned;
++	bool				pwdn_active_low;
+ 	struct camera_common_data	*s_data;
+ 	struct tegracam_device		*tc_dev;
+ 	u8				otp[OV5647_OTP_SIZE];
+@@ -165,6 +166,10 @@
+  * Safe because the driver core serializes probes of this driver (no
+  * PROBE_PREFER_ASYNCHRONOUS). */
+ static bool ov5647_last_gpio_owned;
++/* Same handoff for the polarity flag of reset-gpios, read by parse_dt.
++ * Carriers such as the Auvidea JNX30D drive the camera enable through an
++ * inverter, so "camera on" can be a physical LOW at the SoC. */
++static bool ov5647_last_gpio_active_low;
+ 
+ static const struct regmap_config sensor_regmap_config = {
+ 	.reg_bits = 16,
+@@ -757,6 +762,13 @@
+ 	.fill_string_ctrl = ov5647_fill_string_ctrl,
+ };
+ 
++static bool ov5647_pwdn_active_low(struct camera_common_data *s_data)
++{
++	struct ov5647 *priv = s_data ? (struct ov5647 *)s_data->priv : NULL;
++
++	return priv ? priv->pwdn_active_low : ov5647_last_gpio_active_low;
++}
++
+ static void ov5647_gpio_set(unsigned int gpio, int val)
+ {
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+@@ -792,7 +804,8 @@
+ 	 * connector's PWDN line (our "reset" gpio, active high). The
+ 	 * sensor runs from the module's own 25 MHz oscillator. */
+ 	if (pw->reset_gpio)
+-		ov5647_gpio_set(pw->reset_gpio, 1);
++		ov5647_gpio_set(pw->reset_gpio,
++				ov5647_pwdn_active_low(s_data) ? 0 : 1);
+ 
+ 	/* module power-up + sensor boot time */
+ 	usleep_range(25000, 26000);
+@@ -819,7 +832,8 @@
+ 		}
+ 	} else {
+ 		if (pw->reset_gpio)
+-			ov5647_gpio_set(pw->reset_gpio, 0);
++			ov5647_gpio_set(pw->reset_gpio,
++					ov5647_pwdn_active_low(s_data) ? 1 : 0);
+ 	}
+ 
+ 	pw->state = SWITCH_OFF;
+@@ -875,6 +889,15 @@
+ 	} else if (err < 0) {
+ 		dev_err(dev, "%s: unable to request pwdn_gpio (%d)\n",
+ 			__func__, err);
++	} else {
++		/* The line may still be an input (JNX30D: PR.00 is a
++		 * pulled-down input after boot), and gpio_set_value does not
++		 * change direction. Start it in the "camera off" state. */
++		err = gpio_direction_output(pw->reset_gpio,
++					    ov5647_last_gpio_active_low ? 1 : 0);
++		if (err)
++			dev_err(dev, "%s: pwdn gpio direction failed (%d)\n",
++				__func__, err);
+ 	}
+ 
+ 	pw->state = SWITCH_OFF;
+@@ -916,6 +939,24 @@
+ 	}
+ 	board_priv_pdata->reset_gpio = (unsigned int)gpio;
+ 
++	/* of_get_named_gpio() drops the flags cell; read GPIO_ACTIVE_LOW
++	 * (bit 0 of the second cell) so an inverted enable can be described
++	 * in DT instead of in code. */
++	{
++		struct of_phandle_args args;
++
++		ov5647_last_gpio_active_low = false;
++		if (!of_parse_phandle_with_args(np, "reset-gpios",
++						"#gpio-cells", 0, &args)) {
++			if (args.args_count >= 2)
++				ov5647_last_gpio_active_low =
++					!!(args.args[1] & 1);
++			of_node_put(args.np);
++		}
++		dev_info(dev, "pwdn gpio %d, camera on = %s\n", gpio,
++			 ov5647_last_gpio_active_low ? "LOW" : "HIGH");
++	}
++
+ 	/* Orientation is a property of how the module is mounted, so it comes
+ 	 * from the device tree: the tegracam control list is fixed and has no
+ 	 * entry for a flip, which rules out V4L2_CID_HFLIP and V4L2_CID_VFLIP.
+@@ -1240,6 +1281,7 @@
+ 	priv->s_data = tc_dev->s_data;
+ 	priv->subdev = &tc_dev->s_data->subdev;
+ 	priv->pwdn_gpio_owned = ov5647_last_gpio_owned;
++	priv->pwdn_active_low = ov5647_last_gpio_active_low;
+ 	tegracam_set_privdata(tc_dev, (void *)priv);
+ 
+ 	err = ov5647_board_setup(priv);
