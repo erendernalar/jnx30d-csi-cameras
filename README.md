@@ -33,7 +33,7 @@ These are the things that kept the cameras from working, found on real hardware:
 
 ## Quick start
 
-On the Jetson (camera connected with power off, drone disarmed / props off before any reboot):
+On the Jetson :
 
 ```bash
 sudo apt install nvidia-l4t-kernel-headers device-tree-compiler i2c-tools v4l-utils python3-numpy
